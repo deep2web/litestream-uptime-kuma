@@ -1,43 +1,35 @@
-FROM node as builder
-ARG UPTIME_KUMA_VERSION=2.1.1
+# syntax=docker/dockerfile:1
+FROM louislam/uptime-kuma:2
+
+USER root
+
 ARG LITESTREAM_VERSION=0.5.8
+# BuildKit setzt TARGETARCH typischerweise auf amd64/arm64
+ARG TARGETARCH
 
-ENV APP_HOME /app
-ENV UPTIME_KUMA_VERSION $UPTIME_KUMA_VERSION
-ENV LITESTREAM_VERSION $LITESTREAM_VERSION
-ENV DATA_DIR "${APP_HOME}/fs/"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates wget tar \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN env ; mkdir -p "$APP_HOME"
-WORKDIR "$APP_HOME"
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) LS_ARCH="amd64" ;; \
+      arm64) LS_ARCH="arm64" ;; \
+      *) echo "Unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    wget -nv -O /tmp/litestream.tgz \
+      "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-vfs-v${LITESTREAM_VERSION}-linux-${LS_ARCH}.tar.gz"; \
+    tar -xzf /tmp/litestream.tgz -C /tmp; \
+    install -m 0755 /tmp/litestream /usr/local/bin/litestream; \
+    rm -f /tmp/litestream.tgz /tmp/litestream
 
-RUN apt-get update && apt-get -y install iputils-ping wget
-RUN rm -rf "$APP_HOME"/uptime-kuma* && wget -qO uptime-kuma-$UPTIME_KUMA_VERSION.tar.gz https://github.com/louislam/uptime-kuma/archive/refs/tags/$UPTIME_KUMA_VERSION.tar.gz && tar xzf uptime-kuma-$UPTIME_KUMA_VERSION.tar.gz
-RUN rm -rf "$APP_HOME"/litestream* && wget -q https://github.com/benbjohnson/litestream/releases/download/v$LITESTREAM_VERSION/litestream-v$LITESTREAM_VERSION-linux-amd64-static.tar.gz && tar xzf litestream-v$LITESTREAM_VERSION-linux-amd64-static.tar.gz
+# Beispiel: du kannst dein litestream.yml auch dynamisch via env erzeugen,
+# aber als Startpunkt reicht eine Datei im Image:
+COPY litestream.yml /etc/litestream.yml
+COPY run.sh /usr/local/bin/run.sh
+RUN chmod +x /usr/local/bin/run.sh
 
-RUN mkdir -p "$APP_HOME/fs"
-RUN cd uptime-kuma-$UPTIME_KUMA_VERSION && npm ci --production && npm run download-dist
+EXPOSE 3001
+ENV PORT=3001
 
-RUN rm -rf "$DATA_DIR" && mkdir -p "$DATA_DIR"
-RUN ls -la && mv uptime-kuma-$UPTIME_KUMA_VERSION uptime-kuma
-
-FROM node
-
-RUN apt-get update && apt-get -y install iputils-ping wget
-
-ENV APP_HOME /app
-ENV LITESTREAM_BUCKET uptime-kuma
-ENV LITESTREAM_PATH uptime-kuma-db
-
-ADD gen-config.sh "$APP_HOME/gen-config.sh"
-
-ENV DATA_DIR "${APP_HOME}/fs/"
-ENV OOM_TIMEOUT "15m"
-
-WORKDIR "$APP_HOME"
-
-RUN apt-get update && apt-get -y install iputils-ping wget
-RUN apt-get clean autoclean;apt-get autoremove --yes;rm -rf /var/lib/{apt,dpkg,cache,log}/
-
-COPY --from=builder "$APP_HOME" "$APP_HOME"
-
-CMD /bin/bash -xc 'env ; pwd ; ls -la ; cd uptime-kuma; ../gen-config.sh ; if [[ -n $LITESTREAM_URL ]] ; then ../litestream restore -v -if-replica-exists -config ../litestream.yml "$DATA_DIR"/kuma.db ; exec ../litestream replicate -config ../litestream.yml -exec "/usr/bin/timeout -k 15s $OOM_TIMEOUT node server/server.js"; else exec /usr/bin/timeout -k 15s $OOM_TIMEOUT node server/server.js;fi'
+ENTRYPOINT ["/usr/local/bin/run.sh"]
