@@ -5,6 +5,7 @@ dbs:
         bucket: ${LITESTREAM_BUCKET}
         path: uptime-kuma/kuma.db
         endpoint: ${LITESTREAM_ENDPOINT}
-        region: ${LITESTREAM_REGION}
+        region: ${LITESTREAM_REGION:-auto}
         access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
         secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        force-path-style: true
